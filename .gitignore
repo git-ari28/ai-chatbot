@@ -1,0 +1,7 @@
+models/
+chroma_db/
+data/
+*.gguf
+__pycache__/
+node_modules/
+.env
