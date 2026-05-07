@@ -4,13 +4,9 @@ import os
 from io import BytesIO
 import requests
 import fitz
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import letter
 
 app = Flask(__name__)
 
-# ✅ CORS
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
@@ -37,27 +33,21 @@ def extract_chunks(pdf_path):
 
     clean = " ".join(text.split())
 
-    # split sentences
+    # safer filtering
     sentences = clean.split(".")
+    filtered = [s.strip() for s in sentences if len(s.strip()) > 30]
 
-    # ✅ SAFE filtering (not too aggressive)
-    filtered = [
-        s.strip() for s in sentences
-        if len(s.strip()) > 25
-    ]
-
-    # fallback (IMPORTANT)
     if not filtered:
         filtered = [clean]
 
     clean_text = ". ".join(filtered)
 
-    # chunking
-    chunks = [clean_text[i:i+300] for i in range(0, len(clean_text), 300)]
+    # small chunks (IMPORTANT for phi3)
+    chunks = [clean_text[i:i+250] for i in range(0, len(clean_text), 250)]
 
-    print("📦 TOTAL CHUNKS:", len(chunks))
+    print("📦 CHUNKS:", len(chunks))
 
-    return chunks[:5]  # limit for performance
+    return chunks[:3]   # 🔥 LIMIT (important)
 
 # ---------------- OLLAMA ----------------
 def generate(prompt):
@@ -65,20 +55,20 @@ def generate(prompt):
         res = requests.post(
             OLLAMA_URL,
             json={
-                "model": "tinyllama",
+                "model": "phi3:mini",   # ✅ BACK TO PHI3
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=60
+            timeout=120
         )
 
         data = res.json()
-        print("🤖 OLLAMA RAW:", data)
+        print("🤖 RESPONSE:", data)
 
         return data.get("response", "")
 
     except Exception as e:
-        print("❌ Ollama error:", e)
+        print("❌ ERROR:", e)
         return ""
 
 # ---------------- CLEAN OUTPUT ----------------
@@ -87,7 +77,7 @@ def clean_output(text):
     good = []
 
     for line in lines:
-        if any(word in line.lower() for word in ["example", "format", "generate", "steps"]):
+        if any(x in line.lower() for x in ["text:", "example", "generate", "format"]):
             continue
         good.append(line.strip())
 
@@ -104,7 +94,7 @@ def upload():
 
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "No file"}), 400
 
     os.makedirs("data", exist_ok=True)
     path = os.path.join("data", file.filename)
@@ -112,12 +102,10 @@ def upload():
 
     stored_chunks = extract_chunks(path)
 
-    print("📦 STORED CHUNKS:", len(stored_chunks))
-
     if not stored_chunks:
-        return jsonify({"error": "PDF processing failed"}), 500
+        return jsonify({"error": "Processing failed"}), 500
 
-    return jsonify({"message": "PDF processed successfully"})
+    return jsonify({"message": "PDF ready"})
 
 @app.route("/generate_questions", methods=["POST"])
 def generate_questions():
@@ -127,33 +115,32 @@ def generate_questions():
     if not stored_chunks:
         return jsonify({"error": "Upload PDF first"}), 400
 
-    all_outputs = []
+    outputs = []
 
     for chunk in stored_chunks:
         prompt = f"""
-You are a strict teacher.
+Generate EXACTLY:
 
-DO NOT explain.
-DO NOT give instructions.
-ONLY generate questions.
+5 MCQs (each with 4 options + correct answer)
+2 short answer questions with answers
+
+STRICT RULES:
+- No explanations
+- No instructions
+- No repeating text
+- Only questions
 
 FORMAT:
 
-MCQ 1:
-Question:
+Q1:
 A.
 B.
 C.
 D.
 Answer:
 
-MCQ 2:
-Question:
-A.
-B.
-C.
-D.
-Answer:
+Q2:
+...
 
 Short 1:
 Question:
@@ -167,57 +154,15 @@ Text:
         cleaned = clean_output(result)
 
         if cleaned:
-            all_outputs.append(cleaned)
+            outputs.append(cleaned)
 
-    final_output = "\n\n".join(all_outputs)
+    final = "\n\n".join(outputs)
 
     return jsonify({
-        "mcqs": final_output,
-        "short_questions": final_output,
-        "answers": final_output
+        "mcqs": final,
+        "short_questions": final,
+        "answers": final
     })
-
-# ---------------- PDF DOWNLOAD ----------------
-
-def create_pdf(content, title):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-
-    story = [
-        Paragraph(title, styles["Heading1"]),
-        Spacer(1, 10),
-        Paragraph(content.replace("\n", "<br/>"), styles["Normal"])
-    ]
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
-@app.route("/download_questions_pdf", methods=["POST"])
-def download_q():
-    data = request.json
-
-    pdf = create_pdf(
-        data.get("mcqs", "") + "\n\n" + data.get("short_questions", ""),
-        "Questions"
-    )
-
-    response = make_response(pdf.getvalue())
-    response.headers["Content-Type"] = "application/pdf"
-    response.headers["Content-Disposition"] = "attachment; filename=questions.pdf"
-    return response
-
-@app.route("/download_answers_pdf", methods=["POST"])
-def download_a():
-    data = request.json
-
-    pdf = create_pdf(data.get("answers", ""), "Answers")
-
-    response = make_response(pdf.getvalue())
-    response.headers["Content-Type"] = "application/pdf"
-    response.headers["Content-Disposition"] = "attachment; filename=answers.pdf"
-    return response
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
