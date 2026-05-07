@@ -10,7 +10,7 @@ from reportlab.lib.pagesizes import letter
 
 app = Flask(__name__)
 
-# ✅ CORS FIX
+# ✅ CORS
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
@@ -27,7 +27,7 @@ stored_chunks = []
 def check_auth(req):
     return req.headers.get("x-api-key") == API_KEY
 
-# ---------------- PDF CLEAN + CHUNK ----------------
+# ---------------- PDF → CHUNKS ----------------
 def extract_chunks(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -35,23 +35,27 @@ def extract_chunks(pdf_path):
     for page in doc:
         text += page.get_text()
 
-    # Clean text
     clean = " ".join(text.split())
 
-    # Remove noisy/instruction lines
+    # split sentences
     sentences = clean.split(".")
+
+    # ✅ SAFE filtering (not too aggressive)
     filtered = [
-        s for s in sentences
-        if len(s) > 40 and not any(
-            word in s.lower()
-            for word in ["example", "format", "generate", "steps"]
-        )
+        s.strip() for s in sentences
+        if len(s.strip()) > 25
     ]
+
+    # fallback (IMPORTANT)
+    if not filtered:
+        filtered = [clean]
 
     clean_text = ". ".join(filtered)
 
-    # Chunking
+    # chunking
     chunks = [clean_text[i:i+300] for i in range(0, len(clean_text), 300)]
+
+    print("📦 TOTAL CHUNKS:", len(chunks))
 
     return chunks[:5]  # limit for performance
 
@@ -69,6 +73,8 @@ def generate(prompt):
         )
 
         data = res.json()
+        print("🤖 OLLAMA RAW:", data)
+
         return data.get("response", "")
 
     except Exception as e:
@@ -106,6 +112,11 @@ def upload():
 
     stored_chunks = extract_chunks(path)
 
+    print("📦 STORED CHUNKS:", len(stored_chunks))
+
+    if not stored_chunks:
+        return jsonify({"error": "PDF processing failed"}), 500
+
     return jsonify({"message": "PDF processed successfully"})
 
 @app.route("/generate_questions", methods=["POST"])
@@ -122,7 +133,7 @@ def generate_questions():
         prompt = f"""
 You are a strict teacher.
 
-DO NOT explain anything.
+DO NOT explain.
 DO NOT give instructions.
 ONLY generate questions.
 
@@ -151,6 +162,7 @@ Answer:
 Text:
 {chunk}
 """
+
         result = generate(prompt)
         cleaned = clean_output(result)
 
