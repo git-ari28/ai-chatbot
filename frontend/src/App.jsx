@@ -1,122 +1,184 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useState } from "react";
 
-function App() {
-  const [count, setCount] = useState(0)
+const API = "http://localhost:5000";
+const API_KEY = "teacher123";
+
+export default function App() {
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState(null);
+
+  // Upload PDF
+  const handleUpload = async () => {
+    if (!file) return alert("Upload a PDF first");
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setLoading(true);
+
+    try {
+      const res = await fetch(`${API}/upload`, {
+        method: "POST",
+        headers: {
+          "x-api-key": API_KEY
+        },
+        body: formData
+      });
+
+      const result = await res.json();
+      alert(result.message || "Uploaded");
+    } catch (err) {
+      alert("Upload failed");
+    }
+
+    setLoading(false);
+  };
+
+  // Generate Questions
+  const generateQuestions = async () => {
+    setLoading(true);
+
+    try {
+      const res = await fetch(`${API}/generate_questions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": API_KEY
+        }
+      });
+
+      const result = await res.json();
+      setData(result);
+    } catch (err) {
+      alert("Generation failed");
+    }
+
+    setLoading(false);
+  };
+
+  // Download PDF
+  const downloadPDF = async (type) => {
+    const endpoint =
+      type === "questions"
+        ? "/download_questions_pdf"
+        : "/download_answers_pdf";
+
+    const payload =
+      type === "questions"
+        ? {
+            mcqs: data.mcqs,
+            short_questions: data.short_questions
+          }
+        : {
+            answers: data.answers
+          };
+
+    const res = await fetch(`${API}${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": API_KEY
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${type}.pdf`;
+    a.click();
+  };
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="min-h-screen bg-gray-100 p-6">
+      <div className="max-w-4xl mx-auto bg-white shadow-lg rounded-2xl p-6">
 
-      <div className="ticks"></div>
+        <h1 className="text-3xl font-bold mb-6 text-center">
+          📘 Teacher MCQ Generator
+        </h1>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        {/* Upload Section */}
+        <div className="mb-6">
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => setFile(e.target.files[0])}
+            className="mb-3"
+          />
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+          <button
+            onClick={handleUpload}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg mr-2 hover:bg-blue-700"
+          >
+            Upload PDF
+          </button>
+        </div>
+
+        {/* Generate */}
+        <div className="mb-6">
+          <button
+            onClick={generateQuestions}
+            className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700"
+          >
+            Generate Questions
+          </button>
+        </div>
+
+        {/* Loading */}
+        {loading && (
+          <p className="text-center text-gray-600">⏳ Processing...</p>
+        )}
+
+        {/* Output */}
+        {data && (
+          <div className="space-y-6">
+
+            {/* MCQs */}
+            <div>
+              <h2 className="text-xl font-semibold mb-2">📝 MCQs</h2>
+              <pre className="bg-gray-200 p-3 rounded whitespace-pre-wrap">
+                {data.mcqs}
+              </pre>
+            </div>
+
+            {/* Short Questions */}
+            <div>
+              <h2 className="text-xl font-semibold mb-2">✏️ Short Questions</h2>
+              <pre className="bg-gray-200 p-3 rounded whitespace-pre-wrap">
+                {data.short_questions}
+              </pre>
+            </div>
+
+            {/* Answers */}
+            <div>
+              <h2 className="text-xl font-semibold mb-2">✅ Answer Key</h2>
+              <pre className="bg-gray-200 p-3 rounded whitespace-pre-wrap">
+                {data.answers}
+              </pre>
+            </div>
+
+            {/* Download Buttons */}
+            <div className="flex gap-4">
+              <button
+                onClick={() => downloadPDF("questions")}
+                className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+              >
+                Download Questions PDF
+              </button>
+
+              <button
+                onClick={() => downloadPDF("answers")}
+                className="bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700"
+              >
+                Download Answers PDF
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
-
-export default App
