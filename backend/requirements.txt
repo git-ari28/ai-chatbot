@@ -2,9 +2,9 @@ flask
 flask-cors
 chromadb
 gpt4all
-sentence-transformers
 pdf2image
 requests
 reportlab
 langdetect
 deep-translator
+pymupdf
