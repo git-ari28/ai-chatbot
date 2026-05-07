@@ -26,7 +26,7 @@ def extract_text(pdf_path):
     text = ""
     for page in doc:
         text += page.get_text()
-    return text[:1500]  # LIMIT to avoid crashes
+    return text[:500]  # LIMIT to avoid crashes
 
 # ---------------- OLLAMA ----------------
 def generate(prompt):
