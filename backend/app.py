@@ -10,7 +10,7 @@ from reportlab.lib.pagesizes import letter
 
 app = Flask(__name__)
 
-# ✅ FIXED CORS
+# ✅ CORS FIX
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
@@ -21,20 +21,27 @@ CORS(
 OLLAMA_URL = "http://ai-chatbot-ollama-1:11434/api/generate"
 API_KEY = "teacher123"
 
-stored_text = ""
+stored_chunks = []
 
 # ---------------- AUTH ----------------
 def check_auth(req):
     return req.headers.get("x-api-key") == API_KEY
 
-# ---------------- PDF TEXT EXTRACTION ----------------
-def extract_text(pdf_path):
+# ---------------- PDF → CHUNKS ----------------
+def extract_chunks(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
+
     for page in doc:
         text += page.get_text()
 
-    return text[:300]  # ✅ small input = faster + stable
+    # clean text
+    clean = " ".join(text.split())
+
+    # split into chunks (300 chars)
+    chunks = [clean[i:i+300] for i in range(0, len(clean), 300)]
+
+    return chunks[:5]   # ✅ limit for performance
 
 # ---------------- OLLAMA ----------------
 def generate(prompt):
@@ -42,7 +49,7 @@ def generate(prompt):
         res = requests.post(
             OLLAMA_URL,
             json={
-                "model": "tinyllama",   # ✅ lightweight model
+                "model": "tinyllama",
                 "prompt": prompt,
                 "stream": False
             },
@@ -50,68 +57,81 @@ def generate(prompt):
         )
 
         data = res.json()
-        print("🔍 Ollama response:", data)
-
-        return data.get("response", "No response from model")
+        return data.get("response", "")
 
     except Exception as e:
-        print("❌ Ollama error:", str(e))
-        return "Error generating response"
+        print("❌ Ollama error:", e)
+        return ""
 
 # ---------------- ROUTES ----------------
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    global stored_text
+    global stored_chunks
 
     if not check_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "No file"}), 400
 
     os.makedirs("data", exist_ok=True)
     path = os.path.join("data", file.filename)
     file.save(path)
 
-    stored_text = extract_text(path)
+    stored_chunks = extract_chunks(path)
 
-    return jsonify({"message": "PDF uploaded successfully"})
+    return jsonify({"message": "PDF uploaded and processed"})
 
 @app.route("/generate_questions", methods=["POST"])
 def generate_questions():
     if not check_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
-    if not stored_text:
+    if not stored_chunks:
         return jsonify({"error": "Upload PDF first"}), 400
 
-    print("🔥 Generating questions...")
+    print("🔥 Generating from chunks...")
 
-    # ✅ SINGLE FAST PROMPT (important)
-    prompt = f"""
-You are a teacher creating exam questions.
+    mcqs = []
+    shorts = []
 
-Rules:
-- Be accurate
-- Do not hallucinate facts
-- Keep answers short
+    # generate per chunk
+    for chunk in stored_chunks:
+        prompt = f"""
+You are a strict exam generator.
 
 Generate:
-1) 2 MCQs with options A-D and correct answer
-2) 1 short answer question with answer
+- 1 MCQ with answer
+- 1 short question with answer
+
+Format:
+Q:
+A)
+B)
+C)
+D)
+Answer:
+
+Short:
+Question:
+Answer:
 
 Text:
-{stored_text}
+{chunk}
 """
+        result = generate(prompt)
 
-    result = generate(prompt)
+        if result:
+            mcqs.append(result)
+
+    final_output = "\n\n".join(mcqs)
 
     return jsonify({
-        "mcqs": result,
-        "short_questions": result,
-        "answers": result
+        "mcqs": final_output,
+        "short_questions": final_output,
+        "answers": final_output
     })
 
 # ---------------- PDF DOWNLOAD ----------------
