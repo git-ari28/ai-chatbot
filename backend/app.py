@@ -11,7 +11,7 @@ from reportlab.lib.pagesizes import letter
 app = Flask(__name__)
 CORS(app)
 
-OLLAMA_URL = "http://ollama:11434/api/generate"
+OLLAMA_URL = "http://ai-chatbot-ollama-1:11434/api/generate"
 API_KEY = "teacher123"
 
 stored_text = ""
