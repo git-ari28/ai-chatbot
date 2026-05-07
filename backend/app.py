@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
-import os, uuid
+import os
 from io import BytesIO
 import requests
 import fitz  # PyMuPDF
@@ -9,7 +9,14 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import letter
 
 app = Flask(__name__)
-CORS(app)
+
+# ✅ FIXED CORS (IMPORTANT)
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    allow_headers=["Content-Type", "x-api-key"],
+    methods=["GET", "POST", "OPTIONS"]
+)
 
 OLLAMA_URL = "http://ai-chatbot-ollama-1:11434/api/generate"
 API_KEY = "teacher123"
@@ -26,16 +33,23 @@ def extract_text(pdf_path):
     text = ""
     for page in doc:
         text += page.get_text()
-    return text[:500]  # LIMIT to avoid crashes
+
+    return text[:500]  # ✅ smaller = faster
 
 # ---------------- OLLAMA ----------------
 def generate(prompt):
-    res = requests.post(OLLAMA_URL, json={
-        "model": "phi3:mini",
-        "prompt": prompt,
-        "stream": False
-    })
-    return res.json()["response"]
+    try:
+        res = requests.post(OLLAMA_URL, json={
+            "model": "phi3:mini",
+            "prompt": prompt,
+            "stream": False
+        }, timeout=120)
+
+        return res.json()["response"]
+
+    except Exception as e:
+        print("❌ Ollama error:", e)
+        return "Error generating response"
 
 # ---------------- ROUTES ----------------
 
@@ -46,9 +60,11 @@ def upload():
     if not check_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
-    file = request.files["file"]
-    os.makedirs("data", exist_ok=True)
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "No file provided"}), 400
 
+    os.makedirs("data", exist_ok=True)
     path = os.path.join("data", file.filename)
     file.save(path)
 
@@ -62,45 +78,27 @@ def generate_questions():
         return jsonify({"error": "Unauthorized"}), 401
 
     if not stored_text:
-        return jsonify({"error": "Upload PDF first"})
+        return jsonify({"error": "Upload PDF first"}), 400
 
-    # MCQs
-    mcq_prompt = f"""
-Generate 5 MCQs with answers:
+    print("🔥 Generating questions...")
 
-{stored_text}
+    # ✅ SINGLE FAST PROMPT (huge speed improvement)
+    prompt = f"""
+From the text below generate:
 
-Format:
-Q1:
-A)
-B)
-C)
-D)
-Answer:
-"""
-    mcqs = generate(mcq_prompt)
+1. 3 MCQs with answers
+2. 2 short answer questions with answers
 
-    # Short
-    short_prompt = f"""
-Generate 3 short answer questions:
-
+Text:
 {stored_text}
 """
-    short_q = generate(short_prompt)
 
-    # Answers
-    answer_prompt = f"""
-Give answers for:
-
-{mcqs}
-{short_q}
-"""
-    answers = generate(answer_prompt)
+    result = generate(prompt)
 
     return jsonify({
-        "mcqs": mcqs,
-        "short_questions": short_q,
-        "answers": answers
+        "mcqs": result,
+        "short_questions": result,
+        "answers": result
     })
 
 # ---------------- PDF DOWNLOAD ----------------
@@ -123,8 +121,9 @@ def create_pdf(content, title):
 @app.route("/download_questions_pdf", methods=["POST"])
 def download_q():
     data = request.json
+
     pdf = create_pdf(
-        data["mcqs"] + "\n\n" + data["short_questions"],
+        data.get("mcqs", "") + "\n\n" + data.get("short_questions", ""),
         "Questions"
     )
 
@@ -136,7 +135,8 @@ def download_q():
 @app.route("/download_answers_pdf", methods=["POST"])
 def download_a():
     data = request.json
-    pdf = create_pdf(data["answers"], "Answers")
+
+    pdf = create_pdf(data.get("answers", ""), "Answers")
 
     response = make_response(pdf.getvalue())
     response.headers["Content-Type"] = "application/pdf"
