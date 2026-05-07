@@ -3,7 +3,7 @@ from flask_cors import CORS
 import os
 from io import BytesIO
 import requests
-import fitz  # PyMuPDF
+import fitz
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import letter
@@ -27,7 +27,7 @@ stored_chunks = []
 def check_auth(req):
     return req.headers.get("x-api-key") == API_KEY
 
-# ---------------- PDF → CHUNKS ----------------
+# ---------------- PDF CLEAN + CHUNK ----------------
 def extract_chunks(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -35,13 +35,25 @@ def extract_chunks(pdf_path):
     for page in doc:
         text += page.get_text()
 
-    # clean text
+    # Clean text
     clean = " ".join(text.split())
 
-    # split into chunks (300 chars)
-    chunks = [clean[i:i+300] for i in range(0, len(clean), 300)]
+    # Remove noisy/instruction lines
+    sentences = clean.split(".")
+    filtered = [
+        s for s in sentences
+        if len(s) > 40 and not any(
+            word in s.lower()
+            for word in ["example", "format", "generate", "steps"]
+        )
+    ]
 
-    return chunks[:5]   # ✅ limit for performance
+    clean_text = ". ".join(filtered)
+
+    # Chunking
+    chunks = [clean_text[i:i+300] for i in range(0, len(clean_text), 300)]
+
+    return chunks[:5]  # limit for performance
 
 # ---------------- OLLAMA ----------------
 def generate(prompt):
@@ -63,6 +75,18 @@ def generate(prompt):
         print("❌ Ollama error:", e)
         return ""
 
+# ---------------- CLEAN OUTPUT ----------------
+def clean_output(text):
+    lines = text.split("\n")
+    good = []
+
+    for line in lines:
+        if any(word in line.lower() for word in ["example", "format", "generate", "steps"]):
+            continue
+        good.append(line.strip())
+
+    return "\n".join(good)
+
 # ---------------- ROUTES ----------------
 
 @app.route("/upload", methods=["POST"])
@@ -74,7 +98,7 @@ def upload():
 
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "No file"}), 400
+        return jsonify({"error": "No file uploaded"}), 400
 
     os.makedirs("data", exist_ok=True)
     path = os.path.join("data", file.filename)
@@ -82,7 +106,7 @@ def upload():
 
     stored_chunks = extract_chunks(path)
 
-    return jsonify({"message": "PDF uploaded and processed"})
+    return jsonify({"message": "PDF processed successfully"})
 
 @app.route("/generate_questions", methods=["POST"])
 def generate_questions():
@@ -92,29 +116,35 @@ def generate_questions():
     if not stored_chunks:
         return jsonify({"error": "Upload PDF first"}), 400
 
-    print("🔥 Generating from chunks...")
+    all_outputs = []
 
-    mcqs = []
-    shorts = []
-
-    # generate per chunk
     for chunk in stored_chunks:
         prompt = f"""
-You are a strict exam generator.
+You are a strict teacher.
 
-Generate:
-- 1 MCQ with answer
-- 1 short question with answer
+DO NOT explain anything.
+DO NOT give instructions.
+ONLY generate questions.
 
-Format:
-Q:
-A)
-B)
-C)
-D)
+FORMAT:
+
+MCQ 1:
+Question:
+A.
+B.
+C.
+D.
 Answer:
 
-Short:
+MCQ 2:
+Question:
+A.
+B.
+C.
+D.
+Answer:
+
+Short 1:
 Question:
 Answer:
 
@@ -122,11 +152,12 @@ Text:
 {chunk}
 """
         result = generate(prompt)
+        cleaned = clean_output(result)
 
-        if result:
-            mcqs.append(result)
+        if cleaned:
+            all_outputs.append(cleaned)
 
-    final_output = "\n\n".join(mcqs)
+    final_output = "\n\n".join(all_outputs)
 
     return jsonify({
         "mcqs": final_output,
