@@ -10,7 +10,7 @@ from reportlab.lib.pagesizes import letter
 
 app = Flask(__name__)
 
-# ✅ FIXED CORS (IMPORTANT)
+# ✅ FIXED CORS
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
@@ -34,21 +34,28 @@ def extract_text(pdf_path):
     for page in doc:
         text += page.get_text()
 
-    return text[:500]  # ✅ smaller = faster
+    return text[:300]  # ✅ small input = faster + stable
 
 # ---------------- OLLAMA ----------------
 def generate(prompt):
     try:
-        res = requests.post(OLLAMA_URL, json={
-            "model": "phi3:mini",
-            "prompt": prompt,
-            "stream": False
-        }, timeout=120)
+        res = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": "tinyllama",   # ✅ lightweight model
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=60
+        )
 
-        return res.json()["response"]
+        data = res.json()
+        print("🔍 Ollama response:", data)
+
+        return data.get("response", "No response from model")
 
     except Exception as e:
-        print("❌ Ollama error:", e)
+        print("❌ Ollama error:", str(e))
         return "Error generating response"
 
 # ---------------- ROUTES ----------------
@@ -62,7 +69,7 @@ def upload():
 
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "No file provided"}), 400
+        return jsonify({"error": "No file uploaded"}), 400
 
     os.makedirs("data", exist_ok=True)
     path = os.path.join("data", file.filename)
@@ -82,12 +89,18 @@ def generate_questions():
 
     print("🔥 Generating questions...")
 
-    # ✅ SINGLE FAST PROMPT (huge speed improvement)
+    # ✅ SINGLE FAST PROMPT (important)
     prompt = f"""
-From the text below generate:
+You are a teacher creating exam questions.
 
-1. 3 MCQs with answers
-2. 2 short answer questions with answers
+Rules:
+- Be accurate
+- Do not hallucinate facts
+- Keep answers short
+
+Generate:
+1) 2 MCQs with options A-D and correct answer
+2) 1 short answer question with answer
 
 Text:
 {stored_text}
@@ -143,5 +156,6 @@ def download_a():
     response.headers["Content-Disposition"] = "attachment; filename=answers.pdf"
     return response
 
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
