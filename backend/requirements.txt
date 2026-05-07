@@ -1,10 +1,5 @@
 flask
 flask-cors
-chromadb
-gpt4all
-pdf2image
+pymupdf
 requests
 reportlab
-langdetect
-deep-translator
-pymupdf

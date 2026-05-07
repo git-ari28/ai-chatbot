@@ -2,10 +2,9 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system deps (IMPORTANT)
 RUN apt-get update && apt-get install -y \
-    poppler-utils \
     build-essential \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

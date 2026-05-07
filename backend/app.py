@@ -1,147 +1,50 @@
-from flask import Flask, request, jsonify, make_response, send_from_directory
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
-import os, uuid, time, hashlib, pickle
-from datetime import datetime, timedelta
+import os, uuid
 from io import BytesIO
-
-import chromadb
-from chromadb.utils import embedding_functions
-from reportlab.lib.pagesizes import letter
+import requests
+import fitz  # PyMuPDF
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import letter
 
-from gpt4all import GPT4All
-from ingest import process_single_pdf
-
-# ---------------- APP ----------------
 app = Flask(__name__)
 CORS(app)
 
-# ---------------- CONFIG ----------------
-CHROMA_DB_PATH = "chroma_db"
-COLLECTION_NAME = "rulebook_docs"
-MODEL_NAME = "Phi-3-mini-4k-instruct-q4.gguf"
-MODEL_PATH = "models"
+OLLAMA_URL = "http://ollama:11434/api/generate"
+API_KEY = "teacher123"
 
-CACHE_DIR = "cache"
-QUESTIONS_CACHE_FILE = os.path.join(CACHE_DIR, "questions_cache.pkl")
-
-TEACHER_API_KEY = "teacher123"  # 🔐 change this
-
-os.makedirs(CACHE_DIR, exist_ok=True)
+stored_text = ""
 
 # ---------------- AUTH ----------------
 def check_auth(req):
-    return req.headers.get("x-api-key") == TEACHER_API_KEY
+    return req.headers.get("x-api-key") == API_KEY
 
-# ---------------- CACHE ----------------
-class PersistentCache:
-    def __init__(self, cache_file):
-        self.cache_file = cache_file
-        self.cache = {}
-        self.load()
+# ---------------- PDF TEXT EXTRACTION ----------------
+def extract_text(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    return text[:1500]  # LIMIT to avoid crashes
 
-    def load(self):
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, "rb") as f:
-                    self.cache = pickle.load(f)
-            except:
-                self.cache = {}
-
-    def save(self):
-        with open(self.cache_file, "wb") as f:
-            pickle.dump(self.cache, f)
-
-    def get(self, key):
-        if key in self.cache:
-            item = self.cache[key]
-            if datetime.now() < item["expiry"]:
-                return item["data"]
-        return None
-
-    def set(self, key, data, ttl=86400):
-        self.cache[key] = {
-            "data": data,
-            "expiry": datetime.now() + timedelta(seconds=ttl)
-        }
-        self.save()
-
-questions_cache = PersistentCache(QUESTIONS_CACHE_FILE)
-
-# ---------------- GLOBAL ----------------
-CURRENT_SESSION_ID = None
-CURRENT_FILE_HASH = None
-
-# ---------------- INIT ----------------
-embedding_model = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
-
-client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-collection = client.get_or_create_collection(
-    name=COLLECTION_NAME,
-    embedding_function=embedding_model
-)
-
-model = GPT4All(
-    model_name=MODEL_NAME,
-    model_path=MODEL_PATH,
-    device="cpu"
-)
-
-# ---------------- HELPERS ----------------
-def get_file_hash(path):
-    with open(path, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()
-
+# ---------------- OLLAMA ----------------
 def generate(prompt):
-    with model.chat_session():
-        return model.generate(prompt, max_tokens=400, temp=0.4)
-
-# ---------------- PDF ----------------
-def create_questions_pdf(mcqs, short_q, filename):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-
-    story = []
-    title = Paragraph(f"Question Bank: {filename}", styles["Heading1"])
-    story.append(title)
-    story.append(Spacer(1, 0.2*inch))
-
-    story.append(Paragraph(mcqs.replace("\n", "<br/>"), styles["Normal"]))
-    story.append(Spacer(1, 0.3*inch))
-    story.append(Paragraph(short_q.replace("\n", "<br/>"), styles["Normal"]))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
-def create_answer_pdf(ans, filename):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-
-    story = []
-    story.append(Paragraph(f"Answer Key: {filename}", styles["Heading1"]))
-    story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph(ans.replace("\n", "<br/>"), styles["Normal"]))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+    res = requests.post(OLLAMA_URL, json={
+        "model": "phi3:mini",
+        "prompt": prompt,
+        "stream": False
+    })
+    return res.json()["response"]
 
 # ---------------- ROUTES ----------------
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    global stored_text
+
     if not check_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
-
-    global CURRENT_SESSION_ID, CURRENT_FILE_HASH
 
     file = request.files["file"]
     os.makedirs("data", exist_ok=True)
@@ -149,39 +52,23 @@ def upload():
     path = os.path.join("data", file.filename)
     file.save(path)
 
-    CURRENT_FILE_HASH = get_file_hash(path)
-    CURRENT_SESSION_ID = str(uuid.uuid4())
+    stored_text = extract_text(path)
 
-    process_single_pdf(path, category="course", session_id=CURRENT_SESSION_ID)
-
-    return jsonify({"message": "Upload successful"})
-
+    return jsonify({"message": "PDF uploaded successfully"})
 
 @app.route("/generate_questions", methods=["POST"])
 def generate_questions():
     if not check_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
-    global CURRENT_SESSION_ID, CURRENT_FILE_HASH
-
-    if not CURRENT_SESSION_ID:
+    if not stored_text:
         return jsonify({"error": "Upload PDF first"})
-
-    # CACHE
-    cached = questions_cache.get(CURRENT_FILE_HASH)
-    if cached:
-        return jsonify(cached)
-
-    results = collection.get(where={"session_id": CURRENT_SESSION_ID})
-    docs = results.get("documents", [])
-
-    content = "\n".join(docs)[:2500]
 
     # MCQs
     mcq_prompt = f"""
-Generate 5 MCQs:
+Generate 5 MCQs with answers:
 
-{content}
+{stored_text}
 
 Format:
 Q1:
@@ -193,51 +80,52 @@ Answer:
 """
     mcqs = generate(mcq_prompt)
 
-    # Short Questions
+    # Short
     short_prompt = f"""
-Generate 2 short questions:
+Generate 3 short answer questions:
 
-{content}
-
-Format:
-SA1:
-SA2:
+{stored_text}
 """
     short_q = generate(short_prompt)
 
-    # Answer key
+    # Answers
     answer_prompt = f"""
-Provide answers:
+Give answers for:
 
-MCQs:
 {mcqs}
-
-Short:
 {short_q}
 """
     answers = generate(answer_prompt)
 
-    response = {
+    return jsonify({
         "mcqs": mcqs,
         "short_questions": short_q,
         "answers": answers
-    }
+    })
 
-    questions_cache.set(CURRENT_FILE_HASH, response)
+# ---------------- PDF DOWNLOAD ----------------
 
-    return jsonify(response)
+def create_pdf(content, title):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
 
+    story = [
+        Paragraph(title, styles["Heading1"]),
+        Spacer(1, 10),
+        Paragraph(content.replace("\n", "<br/>"), styles["Normal"])
+    ]
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 @app.route("/download_questions_pdf", methods=["POST"])
-def download_questions_pdf():
-    if not check_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-
-    data = request.get_json()
-    pdf = create_questions_pdf(
-        data["mcqs"],
-        data["short_questions"],
-        data.get("filename", "doc")
+def download_q():
+    data = request.json
+    pdf = create_pdf(
+        data["mcqs"] + "\n\n" + data["short_questions"],
+        "Questions"
     )
 
     response = make_response(pdf.getvalue())
@@ -245,30 +133,15 @@ def download_questions_pdf():
     response.headers["Content-Disposition"] = "attachment; filename=questions.pdf"
     return response
 
-
 @app.route("/download_answers_pdf", methods=["POST"])
-def download_answers_pdf():
-    if not check_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-
-    data = request.get_json()
-    pdf = create_answer_pdf(
-        data["answers"],
-        data.get("filename", "doc")
-    )
+def download_a():
+    data = request.json
+    pdf = create_pdf(data["answers"], "Answers")
 
     response = make_response(pdf.getvalue())
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = "attachment; filename=answers.pdf"
     return response
 
-
-@app.route("/data/<path:filename>")
-def serve_pdf(filename):
-    return send_from_directory("data", filename)
-
-
-# ---------------- RUN ----------------
 if __name__ == "__main__":
-    print("🚀 Teacher MCQ Generator Running...")
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
